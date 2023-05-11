@@ -10,7 +10,7 @@ import type {ReadonlyDeep} from 'type-fest';
 import {ClaspError} from './clasp-error.js';
 import {DOTFILE} from './dotfile.js';
 import {ERROR, LOG} from './messages.js';
-import {getOAuthSettings, getProjectSettings} from './utils.js';
+import {getOAuthSettings} from './utils.js';
 import type {ClaspToken} from './dotfile';
 import type {ClaspCredentials, ClaspOauthCredentials} from './utils';
 
@@ -108,9 +108,6 @@ export const authorize = async (options: AuthorizationOptions) => {
       client.fromJSON(options.creds);
 
       console.log(LOG.CREDS_FROM_PROJECT(options.creds.project_id || 'not specified'));
-
-      const settings = await getProjectSettings();
-      client.subject = settings.subject;
 
       const token = await client.authorize();
       const claspToken = {

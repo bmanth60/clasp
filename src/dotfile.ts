@@ -33,7 +33,6 @@ export interface ProjectSettings {
   fileExtension?: string;
   filePushOrder?: string[];
   parentId?: string[];
-  subject?: string;
 }
 
 const defaultClaspignore = `# ignore all files…
