@@ -68,13 +68,9 @@ export default async (options: CommandOption): Promise<void> => {
 File > Project Properties > Scopes\n`);
 
     // Read credentials file.
-    try {
-      const creds = readJsonSync(options.creds, FS_OPTIONS) as Readonly<ClaspCredentials>;
-      await authorize({creds, scopes, useLocalhost});
-      await enableAppsScriptAPI();
-    } catch (e) {
-      console.log((e as Error).stack);
-    }
+    const creds = readJsonSync(options.creds, FS_OPTIONS) as Readonly<ClaspCredentials>;
+    await authorize({creds, scopes, useLocalhost});
+    await enableAppsScriptAPI();
 
     return;
   }
