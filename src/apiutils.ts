@@ -89,7 +89,8 @@ export const enableOrDisableAPI = async (serviceName: string, enable: boolean): 
  * Enable 'script.googleapis.com' of Google API.
  */
 export const enableAppsScriptAPI = async (): Promise<void> => {
-  await loadAPICredentials(true);
+  await loadAPICredentials(false);
+  console.log('requesting service');
   const name = `projects/${await getProjectIdOrDie()}/services/script.googleapis.com`;
   await serviceUsage.services.enable({name});
 };

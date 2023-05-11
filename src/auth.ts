@@ -1,10 +1,8 @@
-import {OAuth2Client} from 'google-auth-library';
-import {google, script_v1 as scriptV1} from 'googleapis';
+import {google, script_v1 as scriptV1, Auth} from 'googleapis';
 import {createServer} from 'http';
 import open from 'open';
 import readline from 'readline';
 import enableDestroy from 'server-destroy';
-import type {Credentials, GenerateAuthUrlOpts, OAuth2ClientOptions} from 'google-auth-library';
 import type {IncomingMessage, Server, ServerResponse} from 'http';
 import type {AddressInfo} from 'net';
 import type {ReadonlyDeep} from 'type-fest';
@@ -12,9 +10,9 @@ import type {ReadonlyDeep} from 'type-fest';
 import {ClaspError} from './clasp-error.js';
 import {DOTFILE} from './dotfile.js';
 import {ERROR, LOG} from './messages.js';
-import {getOAuthSettings} from './utils.js';
+import {getOAuthSettings, getProjectSettings} from './utils.js';
 import type {ClaspToken} from './dotfile';
-import type {ClaspCredentials} from './utils';
+import type {ClaspCredentials, ClaspOauthCredentials} from './utils';
 
 /**
  * Authentication with Google's APIs.
@@ -48,13 +46,13 @@ import type {ClaspCredentials} from './utils';
 // API settings
 // @see https://developers.google.com/oauthplayground/
 const REDIRECT_URI_OOB = 'urn:ietf:wg:oauth:2.0:oob';
-const globalOauth2ClientSettings: OAuth2ClientOptions = {
+const globalOauth2ClientSettings: Auth.OAuth2ClientOptions = {
   clientId: '1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com',
   clientSecret: 'v6V3fKV_zWU7iw1DrpO1rknX',
   redirectUri: 'http://localhost',
 };
-const globalOAuth2Client = new OAuth2Client(globalOauth2ClientSettings);
-let localOAuth2Client: OAuth2Client; // Must be set up after authorize.
+const globalOAuth2Client = new Auth.OAuth2Client(globalOauth2ClientSettings);
+let localOAuth2Client: Auth.OAuth2Client; // Must be set up after authorize.
 
 // *Global* Google API clients
 
@@ -89,40 +87,88 @@ export const defaultScopes = [
 ];
 
 /**
- * Requests authorization to manage Apps Script projects.
  * @param {boolean} useLocalhost Uses a local HTTP server if true. Manual entry o.w.
  * @param {ClaspCredentials?} creds An optional credentials object.
  * @param {string[]} [scopes=[]] List of OAuth scopes to authorize.
  */
-export const authorize = async (options: {
+interface AuthorizationOptions {
   readonly creds?: Readonly<ClaspCredentials>;
   readonly scopes: readonly string[]; // Only used with custom creds.
   readonly useLocalhost: boolean;
-}) => {
-  try {
-    // Set OAuth2 Client Options
-    let oAuth2ClientOptions: OAuth2ClientOptions;
-    if (options.creds) {
-      // If we passed our own creds
-      // Use local credentials
-      const {
-        client_id: clientId,
-        client_secret: clientSecret,
-        project_id,
-        redirect_uris: redirectUris,
-      } = options.creds.installed;
-      console.log(LOG.CREDS_FROM_PROJECT(project_id));
-      oAuth2ClientOptions = {clientId, clientSecret, redirectUri: redirectUris[0]};
-    } else {
-      // Use global credentials
-      const globalOauth2ClientOptions: OAuth2ClientOptions = {
-        clientId: '1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com',
-        clientSecret: 'v6V3fKV_zWU7iw1DrpO1rknX',
-        redirectUri: 'http://localhost',
+}
+
+/**
+ * Requests authorization to manage Apps Script projects.
+ */
+export const authorize = async (options: AuthorizationOptions) => {
+  if (!options.creds) {
+    // Default to OAuth authorization
+    // Use global credentials
+    const globalOauth2ClientOptions: Auth.OAuth2ClientOptions = {
+      clientId: '1072944905499-vm2v2i5dvn0a0d2o4ca36i1vge8cvbn0.apps.googleusercontent.com',
+      clientSecret: 'v6V3fKV_zWU7iw1DrpO1rknX',
+      redirectUri: 'http://localhost',
+    };
+    return await authorizeWithOauth(options, globalOauth2ClientOptions);
+  }
+
+  // Add type guard
+  if ('type' in options.creds) {
+    // TODO: Allow oauth2 JWT
+    // This is a JWT authorization
+    try {
+      const client = new google.auth.JWT({scopes: defaultScopes as string[]});
+      client.fromJSON(options.creds);
+
+      const settings = await getProjectSettings();
+      client.subject = settings.subject;
+
+      console.log(options.scopes);
+      const token = await client.authorize();
+      const claspToken = {
+        token,
+        oauth2ClientSettings: globalOauth2ClientSettings,
+        isLocalCreds: false,
       };
-      oAuth2ClientOptions = globalOauth2ClientOptions;
+      await DOTFILE.AUTH(claspToken.isLocalCreds).write(claspToken);
+
+      return client;
+    } catch (error) {
+      if (error instanceof ClaspError) {
+        throw error;
+      }
+
+      throw new ClaspError(`${ERROR.UNAUTHENTICATED}${error}`);
+    }
+  }
+
+  //const {port} = server.address() as AddressInfo;
+  // const client = new Auth.OAuth2Client({...oAuth2ClientOptions, redirectUri: `http://localhost:${port}`});
+
+  // This is an OAuth authorization
+  try {
+    // If we passed our own creds
+    // Use local credentials
+    const {
+      client_id: clientId,
+      client_secret: clientSecret,
+      project_id,
+      redirect_uris: redirectUris,
+    } = (options.creds as ClaspOauthCredentials).installed;
+    console.log(LOG.CREDS_FROM_PROJECT(project_id));
+    const oAuth2ClientOptions: Auth.OAuth2ClientOptions = {clientId, clientSecret, redirectUri: redirectUris[0]};
+    return await authorizeWithOauth(options, oAuth2ClientOptions);
+  } catch (error) {
+    if (error instanceof ClaspError) {
+      throw error;
     }
 
+    throw new ClaspError(`${ERROR.UNAUTHENTICATED}${error}`);
+  }
+};
+
+async function authorizeWithOauth(options: AuthorizationOptions, oAuth2ClientOptions: Auth.OAuth2ClientOptions) {
+  try {
     // Set scopes
     let scope = (
       options.creds
@@ -141,19 +187,21 @@ export const authorize = async (options: {
       // '2. File > Project Properties > Scopes');
     }
 
-    const oAuth2ClientAuthUrlOptions: GenerateAuthUrlOpts = {access_type: 'offline', scope};
+    const oAuth2ClientAuthUrlOptions: Auth.GenerateAuthUrlOpts = {access_type: 'offline', scope};
 
     // Grab a token from the credentials.
-    const token = await (options.useLocalhost ? authorizeWithLocalhost : authorizeWithoutLocalhost)(
-      oAuth2ClientOptions,
-      oAuth2ClientAuthUrlOptions
-    );
+    const authorizationFunction = options.useLocalhost ? authorizeWithLocalhost : authorizeWithoutLocalhost;
+    const token = await authorizationFunction(oAuth2ClientOptions, oAuth2ClientAuthUrlOptions);
     console.log(`${LOG.AUTH_SUCCESSFUL}\n`);
 
     // Save the token and own creds together.
     let claspToken: ClaspToken;
     if (options.creds) {
-      const {client_id: clientId, client_secret: clientSecret, redirect_uris: redirectUri} = options.creds.installed;
+      const {
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uris: redirectUri,
+      } = (options.creds as ClaspOauthCredentials).installed;
       // Save local ClaspCredentials.
       claspToken = {
         token,
@@ -177,7 +225,7 @@ export const authorize = async (options: {
 
     throw new ClaspError(`${ERROR.ACCESS_TOKEN}${error}`);
   }
-};
+}
 
 export const getLoggedInEmail = async () => {
   await loadAPICredentials();
@@ -196,6 +244,7 @@ export const getLoggedInEmail = async () => {
 export const loadAPICredentials = async (local = false): Promise<ClaspToken> => {
   // Gets the OAuth settings. May be local or global.
   const rc: ClaspToken = await getOAuthSettings(local);
+  console.log(rc);
   await setOauthClientCredentials(rc);
   return rc;
 };
@@ -203,23 +252,23 @@ export const loadAPICredentials = async (local = false): Promise<ClaspToken> => 
 /**
  * Requests authorization to manage Apps Script projects. Spins up
  * a temporary HTTP server to handle the auth redirect.
- * @param {OAuth2ClientOptions} oAuth2ClientOptions The required client options for auth
- * @param {GenerateAuthUrlOpts} oAuth2ClientAuthUrlOptions Auth URL options
+ * @param {Auth.OAuth2ClientOptions} oAuth2ClientOptions The required client options for auth
+ * @param {Auth.GenerateAuthUrlOpts} oAuth2ClientAuthUrlOptions Auth URL options
  * Used for local/global testing.
  */
 const authorizeWithLocalhost = async (
-  oAuth2ClientOptions: Readonly<OAuth2ClientOptions>,
-  oAuth2ClientAuthUrlOptions: Readonly<GenerateAuthUrlOpts>
-): Promise<Credentials> => {
+  oAuth2ClientOptions: Readonly<Auth.OAuth2ClientOptions>,
+  oAuth2ClientAuthUrlOptions: Readonly<Auth.GenerateAuthUrlOpts>
+): Promise<Auth.Credentials> => {
   // Wait until the server is listening, otherwise we don't have
-  // the server port needed to set up the Oauth2Client.
+  // the server port needed to set up the Auth.OAuth2Client.
   const server = await new Promise<Server>(resolve => {
     const s = createServer();
     enableDestroy(s);
     s.listen(0, () => resolve(s));
   });
   const {port} = server.address() as AddressInfo;
-  const client = new OAuth2Client({...oAuth2ClientOptions, redirectUri: `http://localhost:${port}`});
+  const client = new Auth.OAuth2Client({...oAuth2ClientOptions, redirectUri: `http://localhost:${port}`});
 
   // TODO Add spinner
   const authCode = await new Promise<string>((resolve, reject) => {
@@ -247,14 +296,14 @@ const authorizeWithLocalhost = async (
 /**
  * Requests authorization to manage Apps Script projects. Requires the user to
  * manually copy/paste the authorization code. No HTTP server is used.
- * @param {OAuth2ClientOptions} oAuth2ClientOptions The required client options for auth.
- * @param {GenerateAuthUrlOpts} oAuth2ClientAuthUrlOptions Auth URL options
+ * @param {Auth.OAuth2ClientOptions} oAuth2ClientOptions The required client options for auth.
+ * @param {Auth.GenerateAuthUrlOpts} oAuth2ClientAuthUrlOptions Auth URL options
  */
 const authorizeWithoutLocalhost = async (
-  oAuth2ClientOptions: Readonly<OAuth2ClientOptions>,
-  oAuth2ClientAuthUrlOptions: Readonly<GenerateAuthUrlOpts>
-): Promise<Credentials> => {
-  const client = new OAuth2Client({...oAuth2ClientOptions, redirectUri: REDIRECT_URI_OOB});
+  oAuth2ClientOptions: Readonly<Auth.OAuth2ClientOptions>,
+  oAuth2ClientAuthUrlOptions: Readonly<Auth.GenerateAuthUrlOpts>
+): Promise<Auth.Credentials> => {
+  const client = new Auth.OAuth2Client({...oAuth2ClientOptions, redirectUri: REDIRECT_URI_OOB});
   console.log(LOG.AUTHORIZE(client.generateAuthUrl(oAuth2ClientAuthUrlOptions)));
 
   // TODO Add spinner
@@ -284,8 +333,9 @@ const setOauthClientCredentials = async (rc: ClaspToken) => {
   /**
    * Refreshes the credentials and saves them.
    */
-  const refreshCredentials = async (oAuthClient: ReadonlyDeep<OAuth2Client>) => {
+  const refreshCredentials = async (oAuthClient: ReadonlyDeep<Auth.OAuth2Client>) => {
     await oAuthClient.getAccessToken(); // Refreshes expiry date if required
+    console.log('got access token');
     rc.token = oAuthClient.credentials;
   };
 
@@ -293,11 +343,12 @@ const setOauthClientCredentials = async (rc: ClaspToken) => {
   try {
     if (rc.isLocalCreds) {
       const {clientId, clientSecret, redirectUri} = rc.oauth2ClientSettings;
-      localOAuth2Client = new OAuth2Client({clientId, clientSecret, redirectUri});
+      localOAuth2Client = new Auth.OAuth2Client({clientId, clientSecret, redirectUri});
       localOAuth2Client.setCredentials(rc.token);
       await refreshCredentials(localOAuth2Client);
     } else {
       globalOAuth2Client.setCredentials(rc.token);
+      console.log(globalOAuth2Client.credentials);
       await refreshCredentials(globalOAuth2Client);
     }
     // Save the credentials.

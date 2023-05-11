@@ -19,8 +19,7 @@ import stripBom from 'strip-bom';
 
 import {Conf} from './conf.js';
 import {FS_OPTIONS} from './constants.js';
-
-import type {Credentials, OAuth2ClientOptions} from 'google-auth-library';
+import type {Auth} from 'googleapis';
 
 export type {Dotfile} from 'dotf';
 
@@ -34,6 +33,7 @@ export interface ProjectSettings {
   fileExtension?: string;
   filePushOrder?: string[];
   parentId?: string[];
+  subject?: string;
 }
 
 const defaultClaspignore = `# ignore all files…
@@ -111,7 +111,7 @@ export const DOTFILE = {
  * }
  */
 export interface ClaspToken {
-  token: Credentials;
-  oauth2ClientSettings: OAuth2ClientOptions;
+  token: Auth.Credentials;
+  oauth2ClientSettings: Auth.OAuth2ClientOptions;
   isLocalCreds: boolean;
 }

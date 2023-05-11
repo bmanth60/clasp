@@ -22,6 +22,7 @@ clasp deploy
 rm .clasp.json appsscript.json hello.js
 clear
 -->
+
 ![clasp](https://user-images.githubusercontent.com/744973/42856573-a5d96d7c-89fa-11e8-9d69-8d2c66f00d8d.gif)
 
 **To get started, try out the [codelab](https://g.co/codelabs/clasp)!**
@@ -511,11 +512,10 @@ The following configuration values can be used:
 
 ### `scriptId` (required)
 
-Specifies the id of the Google Script project that clasp will target. 
+Specifies the id of the Google Script project that clasp will target.
 
 1. Open script url.
 1. File > Project properties > Script ID
-
 
 ### `rootDir` (optional)
 
@@ -591,3 +591,8 @@ PRs are very welcome! See the [issues](https://github.com/google/clasp/issues) (
 1. Submit a pull request after testing your feature to make sure it works.
 
 ⚡ Powered by the [Apps Script API](https://developers.google.com/apps-script/api/).
+
+### How to use a service account
+
+Create a service account with the service manager role
+Set the subject
