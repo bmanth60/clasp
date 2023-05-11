@@ -596,3 +596,4 @@ PRs are very welcome! See the [issues](https://github.com/google/clasp/issues) (
 
 Create a service account with the service manager role
 Set the subject
+Ensure script is shared with service account
